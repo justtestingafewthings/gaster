@@ -153,10 +153,7 @@ extern unsigned payload_A9_bin_len, payload_A7_bin_len, payload_notA9_bin_len, p
 static uint16_t cpid;
 static uint32_t payload_dest_armv7;
 static const char *pwnd_str = " PWND:[gaster]";
-static der_item_spec_t der_img4_item_specs[] = {
-	{ 0, DER_IA5_STR, 0 },
-	{ 1, DER_SEQ, 0 }
-}, der_im4p_item_specs[] = {
+static der_item_spec_t der_im4p_item_specs[] = {
 	{ 0, DER_IA5_STR, 0 },
 	{ 1, DER_IA5_STR, 0 },
 	{ 2, DER_IA5_STR, 0 },
@@ -1389,8 +1386,9 @@ der_decode_seq(const uint8_t *der, const uint8_t *der_end, const uint8_t **seq_e
 
 	if((der = der_decode(der, der_end, &der_len, &tag)) != NULL && tag == DER_SEQ) {
 		*seq_end = der + der_len;
+		return der;
 	}
-	return der;
+	return NULL;
 }
 
 static const uint8_t *
@@ -1456,8 +1454,22 @@ img4_get_kbag(img4_t img4, uint8_t *kbag) {
 
 static bool
 img4_init(const uint8_t *src, size_t src_len, img4_t *img4) {
+	const uint8_t *der, *der_end;
+	size_t der_len;
+	uint8_t tag;
+
 	memset(img4, '\0', sizeof(*img4));
-	return (der_parse_seq(src, src_len, der_img4_item_specs, sizeof(der_img4_item_specs) / sizeof(der_img4_item_specs[0]), &img4->magic) && img4->magic.len == 4 && memcmp(img4->magic.buf, "IMG4", img4->magic.len) == 0) || (der_parse_seq(src, src_len, der_im4p_item_specs, sizeof(der_im4p_item_specs) / sizeof(der_im4p_item_specs[0]), &img4->im4p.magic) && img4->im4p.magic.len == 4 && memcmp(img4->im4p.magic.buf, "IM4P", img4->im4p.magic.len) == 0);
+	if((der = der_decode_seq(src, src + src_len, &der_end)) == NULL || (der = der_decode(der, der_end, &der_len, &tag)) == NULL || tag != DER_IA5_STR || der_len != 4) {
+		return false;
+	}
+	if(memcmp(der, "IMG4", der_len) == 0) {
+		img4->magic.buf = der;
+		img4->magic.len = der_len;
+		/* Parse the complete IM4P sequence inside the IMG4 wrapper. */
+		src = der + der_len;
+		src_len = (size_t)(der_end - src);
+	}
+	return der_parse_seq(src, src_len, der_im4p_item_specs, sizeof(der_im4p_item_specs) / sizeof(der_im4p_item_specs[0]), &img4->im4p.magic) && img4->im4p.magic.len == 4 && memcmp(img4->im4p.magic.buf, "IM4P", img4->im4p.magic.len) == 0;
 }
 
 static bool
@@ -1609,7 +1621,27 @@ gaster_decrypt(usb_handle_t *handle, const uint8_t *src, size_t src_len, uint8_t
 	uint8_t kbag[AES_BLOCK_SZ + AES_KEY_SZ_BYTES_256];
 	img4_t img4;
 
-	return img4_init(src, src_len, &img4) && img4_get_kbag(img4, kbag) && gaster_aes(handle, AES_CMD_CBC | AES_CMD_DEC, kbag, kbag, sizeof(kbag), AES_KEY_SZ_256 | AES_KEY_TYPE_GID0) && img4_decrypt(img4, kbag, dst, dst_len);
+	if(!img4_init(src, src_len, &img4)) {
+		fputs("Cannot parse input as IMG4 or IM4P.\n", stderr);
+		return false;
+	}
+	if(!img4_get_kbag(img4, kbag)) {
+		fputs("Input has no usable production keybag.\n", stderr);
+		return false;
+	}
+	if(!gaster_checkm8(handle)) {
+		fputs("Cannot use device in pwned DFU mode.\n", stderr);
+		return false;
+	}
+	if(!gaster_aes(handle, AES_CMD_CBC | AES_CMD_DEC, kbag, kbag, sizeof(kbag), AES_KEY_SZ_256 | AES_KEY_TYPE_GID0)) {
+		fputs("Device failed to decrypt the keybag using GID0.\n", stderr);
+		return false;
+	}
+	if(!img4_decrypt(img4, kbag, dst, dst_len)) {
+		fputs("Cannot decrypt or decompress the image payload.\n", stderr);
+		return false;
+	}
+	return true;
 }
 
 static bool
@@ -1648,10 +1680,19 @@ gaster_decrypt_file(usb_handle_t *handle, const char *src_filename, const char *
 	FILE *dst_fp;
 
 	if(read_binary_file(src_filename, &buf, &len)) {
-		if(gaster_checkm8(handle) && gaster_decrypt(handle, buf, len, &dec, &dec_sz)) {
+		if(gaster_decrypt(handle, buf, len, &dec, &dec_sz)) {
 			if((dst_fp = fopen(dst_filename, "wb")) != NULL) {
 				ret = fwrite(dec, 1, dec_sz, dst_fp) == dec_sz;
-				fclose(dst_fp);
+				if(fclose(dst_fp) != 0) {
+					ret = false;
+				}
+				if(ret) {
+					printf("Decrypted %zu bytes to \"%s\".\n", dec_sz, dst_filename);
+				} else {
+					fprintf(stderr, "Cannot write output file \"%s\".\n", dst_filename);
+				}
+			} else {
+				fprintf(stderr, "Cannot open output file \"%s\".\n", dst_filename);
 			}
 			free(dec);
 		}
