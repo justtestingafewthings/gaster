@@ -1657,13 +1657,8 @@ gaster_decrypt_kbag(usb_handle_t *handle, const char *kbag_str) {
 			}
 		}
 		if(i == sizeof(kbag) && gaster_checkm8(handle) && gaster_aes(handle, AES_CMD_CBC | AES_CMD_DEC, kbag, kbag, sizeof(kbag), AES_KEY_SZ_256 | AES_KEY_TYPE_GID0)) {
-			printf("IV: ");
-			for(i = 0; i < AES_BLOCK_SZ; ++i) {
-				printf("%02" PRIX8, kbag[i]);
-			}
-			printf(", key: ");
-			for(i = 0; i < AES_KEY_SZ_BYTES_256; ++i) {
-				printf("%02" PRIX8, kbag[AES_BLOCK_SZ + i]);
+			for(i = 0; i < sizeof(kbag); ++i) {
+				printf("%02" PRIx8, kbag[i]);
 			}
 			putchar('\n');
 			ret = true;
