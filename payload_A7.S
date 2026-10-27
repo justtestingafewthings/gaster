@@ -82,4 +82,4 @@ _find_zero_loop:
 	ret
 
 PWND_STR:
-.asciz " PWND:[checkm8]"
+.asciz " PWND:[gaster]"
