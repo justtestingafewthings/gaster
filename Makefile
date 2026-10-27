@@ -1,6 +1,14 @@
-.PHONY: macos libusb ios payload clean
+.DEFAULT_GOAL := all
+
+.PHONY: all macos libusb ios payload clean
 
 CC ?= clang
+
+ifeq ($(shell uname -s),Darwin)
+all: macos
+else
+all: libusb
+endif
 
 macos:
 	xxd -iC payload_A9.bin payload_A9.h
